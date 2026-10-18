@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TensioVigil-IoT · Live Clinical Dashboard</title>
+
+<!-- ============================================================
+     TensioVigil-IoT  |  Real-Time Web Dashboard
+     ------------------------------------------------------------
+     Data source : HiveMQ public broker over MQTT-over-WebSockets
+     Subscribes  : tensiovigil/<pid>/vitals
+                   tensiovigil/<pid>/alert
+     Publishes   : tensiovigil/<pid>/command   {"cmd":"mute"|"ping"}
+     Author      : [REDACTED]
+     ============================================================ -->
+
+<!-- MQTT-over-WebSocket client + charting, both from CDN -->
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<style>
+  :root{
+    --bg:#0a0e17; --panel:#121826; --panel2:#0e1422; --line:#1f2a3d;
+    --txt:#e7edf6; --muted:#8aa0bd; --grn:#00e676; --yel:#ffd23f;
+    --red:#ff3b5c; --cyan:#22d3ee; --violet:#a78bfa; --amber:#ffb547;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:radial-gradient(1200px 700px at 80% -10%,#15203a 0%,var(--bg) 55%);
+    color:var(--txt);font-family:"Segoe UI",system-ui,Roboto,Arial,sans-serif;
+    min-height:100vh;padding:18px;
+  }
+  /* ---------- Header ---------- */
+  header{
+    display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    background:linear-gradient(90deg,#101a30,#0c1322);
+    border:1px solid var(--line);border-radius:16px;padding:16px 20px;margin-bottom:16px;
+  }
+  .brand{display:flex;align-items:center;gap:12px;margin-right:auto}
+  .logo{
+    width:44px;height:44px;border-radius:12px;display:grid;place-items:center;
+    background:linear-gradient(135deg,var(--red),#b3002d);font-size:22px;
+    box-shadow:0 0 22px rgba(255,59,92,.45);
+  }
+  h1{font-size:19px;letter-spacing:.4px}
+  .sub{font-size:12px;color:var(--muted);margin-top:2px}
+  .pill{
+    display:flex;align-items:center;gap:8px;background:var(--panel);
+    border:1px solid var(--line);padding:8px 14px;border-radius:999px;font-size:13px;
+  }
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--muted);box-shadow:0 0 0 0 rgba(0,230,118,.6)}
+  .dot.ok{background:var(--grn);animation:pulse 1.6s infinite}
+  .dot.bad{background:var(--red)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(0,230,118,.55)}70%{box-shadow:0 0 0 9px rgba(0,230,118,0)}100%{box-shadow:0 0 0 0 rgba(0,230,118,0)}}
+  .clock{font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted)}
+
+  /* ---------- Card grid ---------- */
+  .grid{display:grid;gap:14px}
+  .metrics{grid-template-columns:repeat(4,1fr)}
+  .charts{grid-template-columns:1fr 1fr;margin-top:14px}
+  .card{
+    background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border:1px solid var(--line);border-radius:16px;padding:16px 18px;position:relative;overflow:hidden;
+  }
+  .card .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+  .big{font-size:46px;font-weight:800;line-height:1.05;font-variant-numeric:tabular-nums;margin-top:6px}
+  .unit{font-size:15px;color:var(--muted);font-weight:600;margin-left:4px}
+  .meta{font-size:12px;color:var(--muted);margin-top:6px}
+  .stripe{position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--muted)}
+
+  /* status (category) card */
+  #catCard .big{font-size:30px}
+  .badge{display:inline-block;padding:7px 14px;border-radius:10px;font-weight:800;font-size:15px;margin-top:8px}
+  .crisis-banner{
+    display:none;margin-top:12px;background:rgba(255,59,92,.14);border:1px solid var(--red);
+    color:#ffd0d8;border-radius:10px;padding:8px 12px;font-weight:700;font-size:13px;animation:flash 1s infinite;
+  }
+  @keyframes flash{50%{opacity:.45}}
+
+  .heart{display:inline-block;animation:beat 1s infinite}
+  @keyframes beat{0%,100%{transform:scale(1)}15%{transform:scale(1.25)}30%{transform:scale(1)}}
+
+  .chart-card h3{font-size:13px;color:var(--muted);font-weight:600;margin-bottom:10px;letter-spacing:.5px}
+  .chart-wrap{position:relative;height:210px}
+
+  /* ---------- Lower row ---------- */
+  .lower{grid-template-columns:1.3fr 1fr;margin-top:14px}
+  .log{height:230px;overflow-y:auto;font-size:13px;display:flex;flex-direction:column;gap:7px}
+  .log .row{display:flex;gap:10px;align-items:flex-start;border-left:3px solid var(--line);padding:6px 10px;background:#0c1320;border-radius:8px}
+  .log .row.alert{border-left-color:var(--red)}
+  .log .row.warn{border-left-color:var(--yel)}
+  .log .row.info{border-left-color:var(--cyan)}
+  .log .t{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .log .m{color:var(--txt)}
+
+  .controls{display:flex;flex-direction:column;gap:12px}
+  .field{display:flex;flex-direction:column;gap:5px}
+  label{font-size:12px;color:var(--muted)}
+  input,select{
+    background:#0c1320;border:1px solid var(--line);color:var(--txt);
+    padding:10px 12px;border-radius:10px;font-size:14px;width:100%;
+  }
+  .btns{display:flex;gap:10px;flex-wrap:wrap}
+  button{
+    flex:1;min-width:120px;border:none;border-radius:10px;padding:12px 14px;font-size:14px;
+    font-weight:700;cursor:pointer;color:#06101f;transition:transform .05s,filter .15s;
+  }
+  button:active{transform:translateY(1px)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .b-mute{background:var(--amber)} .b-ping{background:var(--cyan)} .b-conn{background:var(--grn)}
+  .b-demo{background:var(--violet)}
+  footer{color:var(--muted);font-size:11px;text-align:center;margin-top:18px;line-height:1.6}
+  code{background:#0c1320;border:1px solid var(--line);padding:1px 6px;border-radius:6px;color:var(--cyan)}
+
+  @media(max-width:900px){.metrics{grid-template-columns:repeat(2,1fr)}.charts,.lower{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="logo">❤️</div>
+    <div>
+      <h1>TensioVigil&#8209;IoT · Live Clinical Dashboard</h1>
+      <div class="sub">Real&#8209;time cardiovascular vital&#8209;sign monitoring for hypertensive patients</div>
+    </div>
+  </div>
+  <div class="pill"><span>Patient</span><strong id="pidLabel">HTN-1010</strong></div>
+  <div class="pill"><span class="dot" id="statusDot"></span><span id="statusText">Connecting…</span></div>
+  <div class="pill clock" id="clock">--:--:--</div>
+</header>
+
+<!-- ===== Metric cards ===== -->
+<section class="grid metrics">
+  <div class="card" id="bpCard">
+    <div class="stripe" id="bpStripe"></div>
+    <div class="k">Blood Pressure</div>
+    <div class="big"><span id="sbp">--</span><span style="color:var(--muted)">/</span><span id="dbp">--</span><span class="unit">mmHg</span></div>
+    <div class="meta">Systolic / Diastolic · target &lt; 140/90</div>
+  </div>
+
+  <div class="card" id="hrCard">
+    <div class="stripe" id="hrStripe"></div>
+    <div class="k">Heart Rate <span class="heart" id="heart">❤</span></div>
+    <div class="big"><span id="hr">--</span><span class="unit">bpm</span></div>
+    <div class="meta" id="hrMeta">Resting 60–100 bpm</div>
+  </div>
+
+  <div class="card" id="tempCard">
+    <div class="stripe" id="tempStripe"></div>
+    <div class="k">Body Temperature</div>
+    <div class="big"><span id="temp">--</span><span class="unit">°C</span></div>
+    <div class="meta" id="tempMeta">Normal 36.0–37.5 °C</div>
+  </div>
+
+  <div class="card" id="catCard">
+    <div class="stripe" id="catStripe"></div>
+    <div class="k">Clinical Classification</div>
+    <div class="big"><span class="badge" id="catBadge" style="background:#1f2a3d">Awaiting data…</span></div>
+    <div class="crisis-banner" id="crisisBanner">⚠ HYPERTENSIVE EMERGENCY</div>
+    <div class="meta">2023 ESH office&#8209;BP grading</div>
+  </div>
+</section>
+
+<!-- ===== Trend charts ===== -->
+<section class="grid charts">
+  <div class="card chart-card"><h3>BLOOD PRESSURE TREND (mmHg)</h3><div class="chart-wrap"><canvas id="bpChart"></canvas></div></div>
+  <div class="card chart-card"><h3>HEART RATE TREND (bpm)</h3><div class="chart-wrap"><canvas id="hrChart"></canvas></div></div>
+</section>
+
+<!-- ===== Log + controls ===== -->
+<section class="grid lower">
+  <div class="card chart-card">
+    <h3>EVENT &amp; ALERT LOG</h3>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="card chart-card">
+    <h3>DEVICE CONTROL &amp; CONNECTION</h3>
+    <div class="controls">
+      <div class="field">
+        <label for="pid">Patient ID (topic root)</label>
+        <input id="pid" value="HTN-1010" />
+      </div>
+      <div class="field">
+        <label for="broker">MQTT-over-WebSocket broker</label>
+        <input id="broker" value="wss://broker.hivemq.com:8884/mqtt" />
+      </div>
+      <div class="btns">
+        <button class="b-conn" id="btnConn">Reconnect</button>
+        <button class="b-mute" id="btnMute" disabled>🔇 Mute Buzzer</button>
+        <button class="b-ping" id="btnPing" disabled>📡 Ping Device</button>
+      </div>
+      <div class="btns">
+        <button class="b-demo" id="btnDemo">▶ Demo data (preview UI)</button>
+      </div>
+      <div class="meta" id="lastSeen">No telemetry received yet.</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Subscribed to <code id="fTopicV">tensiovigil/HTN-1010/vitals</code> and <code id="fTopicA">tensiovigil/HTN-1010/alert</code> ·
+  commands published to <code id="fTopicC">tensiovigil/HTN-1010/command</code><br/>
+  Live data appears only while the Wokwi ESP32 simulation is running and publishing. IoT coursework prototype.
+</footer>
+
+<script>
+/* ============================================================
+   1. CONFIG & STATE
+   ============================================================ */
+const MAX_POINTS = 30;           // rolling window for charts
+const STALE_MS   = 15000;        // no data for 15s => "NO SIGNAL"
+let client = null;
+let pid = "HTN-1010";
+let TOPIC_V, TOPIC_A, TOPIC_C;
+let lastDataMs = 0;
+let demoTimer = null;
+
+const $ = id => document.getElementById(id);
+
+/* ============================================================
+   2. CLINICAL COLOUR / LABEL HELPERS (mirror the firmware LEDs)
+   ============================================================ */
+// Firmware: GRN cat<=1 | YEL cat==2||3 | RED cat>=4
+function catColor(cat){ if(cat<=1)return getCss('--grn'); if(cat<=3)return getCss('--yel'); return getCss('--red'); }
+function hrColor(hr){ if(hr<60||hr>100)return (hr<50||hr>120)?getCss('--red'):getCss('--yel'); return getCss('--grn'); }
+function tempColor(t){ if(t<35||t>38)return getCss('--red'); if(t<36||t>37.5)return getCss('--yel'); return getCss('--grn'); }
+function getCss(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+/* ============================================================
+   3. CHARTS (Chart.js)
+   ============================================================ */
+const baseOpts = {
+  responsive:true, maintainAspectRatio:false, animation:false,
+  plugins:{legend:{labels:{color:'#8aa0bd',boxWidth:12,font:{size:11}}}},
+  scales:{
+    x:{ticks:{color:'#5f79a9',maxTicksLimit:6,font:{size:10}},grid:{color:'#1f2a3d'}},
+    y:{ticks:{color:'#8aa0bd',font:{size:10}},grid:{color:'#1f2a3d'}}
+  }
+};
+function mkChart(ctx,datasets,extraY){
+  const o=JSON.parse(JSON.stringify(baseOpts));
+  o.scales.x.ticks.color='#5f79a9';
+  if(extraY)Object.assign(o.scales.y,extraY);
+  return new Chart(ctx,{type:'line',data:{labels:[],datasets},options:o});
+}
+const bpChart = mkChart($('bpChart').getContext('2d'),[
+  {label:'Systolic',  data:[],borderColor:'#ff3b5c',backgroundColor:'rgba(255,59,92,.12)',tension:.35,borderWidth:2,pointRadius:0,fill:true},
+  {label:'Diastolic', data:[],borderColor:'#22d3ee',backgroundColor:'rgba(34,211,238,.10)',tension:.35,borderWidth:2,pointRadius:0,fill:true}
+],{suggestedMin:40,suggestedMax:200});
+const hrChart = mkChart($('hrChart').getContext('2d'),[
+  {label:'Heart Rate',data:[],borderColor:'#00e676',backgroundColor:'rgba(0,230,118,.12)',tension:.35,borderWidth:2,pointRadius:0,fill:true}
+],{suggestedMin:30,suggestedMax:180});
+
+function pushChart(chart,label,values){
+  chart.data.labels.push(label);
+  values.forEach((val,i)=>chart.data.datasets[i].data.push(val));
+  if(chart.data.labels.length>MAX_POINTS){
+    chart.data.labels.shift();
+    chart.data.datasets.forEach(d=>d.data.shift());
+  }
+  chart.update('none');
+}
+
+/* ============================================================
+   4. UI RENDER
+   ============================================================ */
+function renderVitals(d){
+  // Numbers
+  $('sbp').textContent = d.sbp; $('dbp').textContent = d.dbp;
+  $('hr').textContent  = d.hr;
+  $('temp').textContent= (typeof d.tempC==='number')? d.tempC.toFixed(1) : d.tempC;
+
+  // Category badge
+  const c = (typeof d.cat==='number')? d.cat : 0;
+  const col = catColor(c);
+  $('catBadge').textContent = d.label || 'Unknown';
+  $('catBadge').style.background = col;
+  $('catBadge').style.color = (c>=2 && c<=3) ? '#06101f' : '#fff';
+  $('bpStripe').style.background = col;
+  $('catStripe').style.background = col;
+
+  // HR colouring
+  const hc = hrColor(d.hr);
+  $('hrStripe').style.background = hc;
+  $('hr').style.color = hc;
+  $('hrMeta').textContent = d.hr<60?'Bradycardia (<60 bpm)':d.hr>100?'Tachycardia (>100 bpm)':'Within resting range';
+
+  // Temp colouring
+  const tc = tempColor(d.tempC);
+  $('tempStripe').style.background = tc;
+  $('temp').style.color = tc;
+  $('tempMeta').textContent = d.tempC<35?'Hypothermia (<35 °C)':d.tempC>38?'Febrile (>38 °C)':'Normothermic';
+
+  // Heartbeat speed synced to HR
+  $('heart').style.animationDuration = Math.max(0.35, 60/Math.max(d.hr,1))+'s';
+
+  // Crisis banner (SBP>=180 OR DBP>=120 — same rule as firmware)
+  const crisis = d.sbp>=180 || d.dbp>=120;
+  $('crisisBanner').style.display = crisis?'block':'none';
+
+  // Charts
+  const tlabel = new Date().toLocaleTimeString();
+  pushChart(bpChart,tlabel,[d.sbp,d.dbp]);
+  pushChart(hrChart,tlabel,[d.hr]);
+
+  lastDataMs = Date.now();
+  $('lastSeen').textContent = 'Last telemetry: '+tlabel+'  (device uptime '+fmtUptime(d.ts)+')';
+}
+
+function fmtUptime(ms){
+  if(!ms) return '—';
+  const s=Math.floor(ms/1000); const m=Math.floor(s/60);
+  return m+'m '+(s%60)+'s';
+}
+
+function logEvent(msg,type){
+  const row=document.createElement('div');
+  row.className='row '+(type||'info');
+  row.innerHTML='<span class="t">'+new Date().toLocaleTimeString()+'</span><span class="m">'+msg+'</span>';
+  const box=$('log'); box.prepend(row);
+  while(box.children.length>60) box.removeChild(box.lastChild);
+}
+
+/* ============================================================
+   5. MQTT CONNECTION
+   ============================================================ */
+function setStatus(state,text){
+  const dot=$('statusDot');
+  dot.className='dot'+(state==='ok'?' ok':state==='bad'?' bad':'');
+  $('statusText').textContent=text;
+  const live = state==='ok';
+  $('btnMute').disabled=!live; $('btnPing').disabled=!live;
+}
+
+function computeTopics(){
+  TOPIC_V='tensiovigil/'+pid+'/vitals';
+  TOPIC_A='tensiovigil/'+pid+'/alert';
+  TOPIC_C='tensiovigil/'+pid+'/command';
+  $('pidLabel').textContent=pid;
+  $('fTopicV').textContent=TOPIC_V;
+  $('fTopicA').textContent=TOPIC_A;
+  $('fTopicC').textContent=TOPIC_C;
+}
+
+function connect(){
+  stopDemo();
+  pid = ($('pid').value||'HTN-1010').trim();
+  computeTopics();
+  if(client){ try{client.end(true);}catch(e){} }
+
+  const url = $('broker').value.trim();
+  setStatus('','Connecting…');
+  logEvent('Connecting to broker '+url+' …','info');
+
+  client = mqtt.connect(url,{
+    clientId:'TensioVigil-Dash-'+Math.random().toString(16).slice(2,10),
+    keepalive:30, reconnectPeriod:4000, connectTimeout:8000, clean:true
+  });
+
+  client.on('connect',()=>{
+    setStatus('ok','Connected · live');
+    logEvent('MQTT connected. Subscribing to vitals + alert topics.','info');
+    client.subscribe([TOPIC_V,TOPIC_A],{qos:1});
+  });
+  client.on('reconnect',()=>setStatus('','Reconnecting…'));
+  client.on('offline',  ()=>setStatus('bad','Offline'));
+  client.on('error',e=>{ setStatus('bad','Error'); logEvent('Connection error: '+e.message,'alert'); });
+
+  client.on('message',(topic,payload)=>{
+    let d; try{ d=JSON.parse(payload.toString()); }catch(e){ return; }
+
+    if(d.pong){ logEvent('Device replied to PING (pong) ✔','info'); return; }
+
+    if(topic===TOPIC_A){               // alert topic
+      logEvent('🚨 ALERT — '+(d.reason||'?')+'  ['+d.sbp+'/'+d.dbp+' mmHg, HR '+d.hr+']',
+               (d.reason==='HYPERTENSIVE_CRISIS')?'alert':'warn');
+      return;
+    }
+    if(d.sbp!==undefined){             // vitals topic
+      renderVitals(d);
+    }
+  });
+}
+
+/* ---- command publishing (mute / ping) ---- */
+function sendCmd(cmd){
+  if(!client||!client.connected){ logEvent('Cannot send "'+cmd+'": not connected.','warn'); return; }
+  client.publish(TOPIC_C, JSON.stringify({cmd:cmd}), {qos:1});
+  logEvent('▶ Command sent to device: '+cmd.toUpperCase(),'info');
+}
+
+/* ============================================================
+   6. DEMO MODE (clearly-labelled synthetic data, OFF by default)
+       Lets an examiner preview the UI when the sim is not running.
+   ============================================================ */
+function startDemo(){
+  if(client){ try{client.end(true);}catch(e){} }
+  setStatus('','DEMO MODE (synthetic data)');
+  $('statusDot').style.background=getCss('--violet');
+  logEvent('Demo mode ON — values are SIMULATED in-browser, not from the device.','warn');
+  $('btnDemo').textContent='■ Stop demo';
+  let t=0;
+  demoTimer=setInterval(()=>{
+    t++;
+    const sbp=Math.round(118+35*Math.sin(t/6)+ (Math.random()*8));
+    const dbp=Math.round(78 +20*Math.sin(t/6)+ (Math.random()*5));
+    const hr =Math.round(74 +28*Math.sin(t/4)+ (Math.random()*6));
+    let cat=0,label='Optimal';
+    const hi=Math.max(sbp,dbp* (140/90));
+    if(sbp>=180||dbp>=120){cat=5;label='Grade-3 CRIS';}
+    else if(sbp>=160||dbp>=100){cat=4;label='Grade-2 HTN';}
+    else if(sbp>=140||dbp>=90){cat=3;label='Grade-1 HTN';}
+    else if(sbp>=130||dbp>=85){cat=2;label='High-normal';}
+    else if(sbp>=120||dbp>=80){cat=1;label='Normal';}
+    renderVitals({sbp,dbp,hr,tempC:36.6+Math.random()*0.6,cat,label,ts:t*5000});
+    if(sbp>=180||dbp>=120) logEvent('🚨 [DEMO] HYPERTENSIVE_CRISIS ['+sbp+'/'+dbp+']','alert');
+  },2000);
+}
+function stopDemo(){
+  if(demoTimer){clearInterval(demoTimer);demoTimer=null;$('btnDemo').textContent='▶ Demo data (preview UI)';}
+}
+function toggleDemo(){ demoTimer?(stopDemo(),connect()):startDemo(); }
+
+/* ============================================================
+   7. WATCHDOG + CLOCK + WIRE-UP
+   ============================================================ */
+setInterval(()=>{
+  $('clock').textContent=new Date().toLocaleTimeString();
+  if(!demoTimer && client && client.connected && lastDataMs && Date.now()-lastDataMs>STALE_MS){
+    setStatus('bad','Connected · NO SIGNAL');
+  }
+},1000);
+
+$('btnConn').onclick=connect;
+$('btnMute').onclick=()=>sendCmd('mute');
+$('btnPing').onclick=()=>sendCmd('ping');
+$('btnDemo').onclick=toggleDemo;
+
+// auto-connect on load
+connect();
+</script>
+</body>
+</html>

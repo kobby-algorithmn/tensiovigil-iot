@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TensioVigil Clinician Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#eef2f6; --panel:#ffffff; --ink:#1f2d3d; --muted:#6b7c8f;
+    --line:#e2e8f0; --navy:#0d3b66; --navy2:#16539e;
+    --green:#1b8a4b; --amber:#e08a00; --red:#d12b2b; --blue:#16539e;
+    --shadow:0 1px 3px rgba(16,40,70,.08),0 8px 24px rgba(16,40,70,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:15px;line-height:1.45;
+    background-image:radial-gradient(circle at 20% -10%,rgba(22,83,158,.06),transparent 40%);}
+  .num{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
+  .wrap{max-width:1060px;margin:0 auto;padding:18px}
+
+  /* top bar */
+  header{background:linear-gradient(100deg,var(--navy),var(--navy2));color:#fff;
+    border-radius:12px;padding:16px 20px;display:flex;align-items:center;
+    justify-content:space-between;box-shadow:var(--shadow);flex-wrap:wrap;gap:10px}
+  header h1{font-size:19px;margin:0;font-weight:700;letter-spacing:.2px}
+  header h1 span{opacity:.8;font-weight:500}
+  .status{display:flex;align-items:center;gap:10px;font-size:13px}
+  .pill{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.14);
+    padding:5px 11px;border-radius:999px;font-weight:500}
+  .dot{width:9px;height:9px;border-radius:50%;background:#9fb3c8;transition:.3s}
+  .dot.on{background:#36d57d;box-shadow:0 0 0 4px rgba(54,213,125,.25)}
+  .dot.err{background:#ff6b6b;box-shadow:0 0 0 4px rgba(255,107,107,.25)}
+  .btn{font-family:inherit;font-size:13px;font-weight:600;border:0;border-radius:8px;
+    padding:7px 13px;cursor:pointer;color:#fff;transition:.15s;white-space:nowrap}
+  .btn:hover{filter:brightness(1.07)} .btn:active{transform:translateY(1px)}
+  .btn.ghost{background:rgba(255,255,255,.16)}
+
+  /* settings */
+  .settings{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;margin-top:14px;box-shadow:var(--shadow)}
+  .settings h2{margin:0 0 4px;font-size:14px;color:var(--navy)}
+  .settings .sub{color:var(--muted);font-size:12.5px;margin-bottom:12px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px}
+  .field label{display:block;font-size:11.5px;font-weight:600;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+  .field input,.field select{width:100%;padding:8px 10px;border:1px solid var(--line);
+    border-radius:7px;font-family:inherit;font-size:13.5px;background:#fafcfe}
+  .field input:focus{outline:2px solid rgba(22,83,158,.3);border-color:var(--navy2)}
+  .presets{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .chipbtn{font-size:12px;font-weight:600;border:1px solid var(--line);background:#f4f8fc;
+    color:var(--navy);border-radius:7px;padding:6px 11px;cursor:pointer}
+  .chipbtn:hover{background:#e8f1fb}
+  .conn-row{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:13px;flex-wrap:wrap}
+  .hint{font-size:12px;color:var(--muted)}
+
+  /* tiles */
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-top:14px}
+  .tile{background:var(--panel);border:1px solid var(--line);border-left:5px solid var(--line);
+    border-radius:12px;padding:15px 17px;box-shadow:var(--shadow);transition:border-color .3s}
+  .tile .k{font-size:12.5px;color:var(--muted);font-weight:600}
+  .tile .v{font-size:46px;font-weight:600;line-height:1.05;margin:5px 0 2px}
+  .tile .u{font-size:14px;color:var(--muted);font-weight:500;margin-left:5px}
+  .tile .tag{font-size:12.5px;font-weight:600;margin-top:3px}
+  .ok{border-left-color:var(--green)!important} .ok .v,.ok .tag{color:var(--green)}
+  .warn{border-left-color:var(--amber)!important} .warn .v,.warn .tag{color:var(--amber)}
+  .crit{border-left-color:var(--red)!important} .crit .v,.crit .tag{color:var(--red)}
+  .crit{animation:flash 1.1s ease-in-out infinite}
+  @keyframes flash{0%,100%{background:#fff}50%{background:#fff3f3}}
+
+  /* middle row */
+  .row{display:grid;grid-template-columns:2fr 1fr;gap:13px;margin-top:13px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:15px 17px;box-shadow:var(--shadow)}
+  .card h3{margin:0 0 10px;font-size:14px;color:var(--navy)}
+  .legend{float:right;font-size:11.5px;color:var(--muted);font-weight:500}
+  .log{list-style:none;margin:0;padding:0;max-height:300px;overflow:auto}
+  .log li{padding:8px 0;border-bottom:1px dashed var(--line);font-size:13px}
+  .log li:last-child{border-bottom:0}
+  .log .t{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:12.5px}
+  .log .r{color:var(--muted)}
+  .log .lvl-crit .t{color:var(--red)} .log .lvl-warn .t{color:var(--amber)}
+  .log .lvl-info .t{color:var(--blue)}
+  .empty{color:var(--muted);font-size:13px;font-style:italic}
+
+  /* command bar */
+  .cmd{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:15px 17px;margin-top:13px;box-shadow:var(--shadow)}
+  .cmd h3{margin:0 0 11px;font-size:14px;color:var(--navy)}
+  .cmd-btns{display:flex;gap:10px;flex-wrap:wrap}
+  .cmd .mute{background:var(--red)} .cmd .ping{background:var(--blue)} .cmd .read{background:var(--green)}
+  .cmd-btns .btn{padding:10px 20px;font-size:13.5px}
+  .cmd-btns .btn:disabled{opacity:.45;cursor:not-allowed}
+  .last{font-size:12.5px;color:var(--muted);margin-top:11px}
+  .last code{background:#f1f5f9;padding:2px 6px;border-radius:5px;font-size:12px}
+  @media(max-width:780px){.tiles{grid-template-columns:repeat(2,1fr)}.row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>TensioVigil Clinician Dashboard <span id="pidTitle">— Patient HTN-1010</span></h1>
+    <div class="status">
+      <span class="pill"><span class="dot" id="dot"></span><span id="connText">Disconnected</span></span>
+      <span class="pill" id="qosPill" style="display:none">QoS 1</span>
+      <span class="pill" id="tlsPill" style="display:none">TLS</span>
+      <button class="btn ghost" id="toggleSettings">Settings</button>
+    </div>
+  </header>
+
+  <!-- connection settings -->
+  <section class="settings" id="settings">
+    <h2>Broker connection</h2>
+    <div class="sub">Browser MQTT runs over WebSocket. Use a preset, or enter your broker manually, then Connect.</div>
+    <div class="presets">
+      <button class="chipbtn" data-preset="public">HiveMQ public (test, no login)</button>
+      <button class="chipbtn" data-preset="cloud">HiveMQ Cloud (TLS + login)</button>
+    </div>
+    <div class="grid">
+      <div class="field"><label>Host</label><input id="host" value="broker.hivemq.com"></div>
+      <div class="field"><label>Port</label><input id="port" class="num" value="8000"></div>
+      <div class="field"><label>Path</label><input id="path" value="/mqtt"></div>
+      <div class="field"><label>TLS (wss)</label>
+        <select id="tls"><option value="no">Off (ws)</option><option value="yes">On (wss)</option></select></div>
+      <div class="field"><label>Username</label><input id="user" placeholder="(blank for public)"></div>
+      <div class="field"><label>Password</label><input id="pass" type="password" placeholder="(blank for public)"></div>
+      <div class="field"><label>Patient ID</label><input id="pid" value="HTN-1010"></div>
+    </div>
+    <div class="conn-row">
+      <span class="hint" id="urlHint"></span>
+      <button class="btn" id="connectBtn" style="background:var(--navy)">Connect</button>
+    </div>
+  </section>
+
+  <!-- vital tiles -->
+  <div class="tiles">
+    <div class="tile" id="tSbp"><div class="k">Systolic BP</div><div><span class="v num" id="vSbp">--</span><span class="u">mmHg</span></div><div class="tag" id="gSbp">awaiting data</div></div>
+    <div class="tile" id="tDbp"><div class="k">Diastolic BP</div><div><span class="v num" id="vDbp">--</span><span class="u">mmHg</span></div><div class="tag" id="gDbp">&nbsp;</div></div>
+    <div class="tile" id="tHr"><div class="k">Heart Rate</div><div><span class="v num" id="vHr">--</span><span class="u">bpm</span></div><div class="tag" id="gHr">&nbsp;</div></div>
+    <div class="tile" id="tTmp"><div class="k">Body Temperature</div><div><span class="v num" id="vTmp">--</span><span class="u">&deg;C</span></div><div class="tag" id="gTmp">&nbsp;</div></div>
+  </div>
+
+  <!-- trend + alerts -->
+  <div class="row">
+    <div class="card">
+      <span class="legend">SBP &bull; DBP &bull; HR</span>
+      <h3>Live SBP / DBP / HR trend</h3>
+      <canvas id="chart" height="150"></canvas>
+    </div>
+    <div class="card">
+      <h3>Recent /alert events</h3>
+      <ul class="log" id="log"><li class="empty">No alerts received yet.</li></ul>
+    </div>
+  </div>
+
+  <!-- command bar -->
+  <div class="cmd">
+    <h3>Two-way control &mdash; publish to <span class="num" id="cmdTopic">tensiovigil/HTN-1010/command</span></h3>
+    <div class="cmd-btns">
+      <button class="btn mute" data-cmd="mute" disabled>MUTE</button>
+      <button class="btn ping" data-cmd="ping" disabled>PING</button>
+      <button class="btn read" data-cmd="reading" disabled>REQUEST READING</button>
+    </div>
+    <div class="last" id="lastCmd">No command published yet.</div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let client = null, pid = 'HTN-1010';
+const MAXPTS = 40;
+
+// ---- chart ----
+const ctx = $('chart').getContext('2d');
+const chart = new Chart(ctx, {
+  type:'line',
+  data:{ labels:[], datasets:[
+    {label:'SBP',data:[],borderColor:'#d12b2b',backgroundColor:'transparent',tension:.35,pointRadius:0,borderWidth:2},
+    {label:'DBP',data:[],borderColor:'#16539e',backgroundColor:'transparent',tension:.35,pointRadius:0,borderWidth:2},
+    {label:'HR', data:[],borderColor:'#1b8a4b',backgroundColor:'transparent',tension:.35,pointRadius:0,borderWidth:2,borderDash:[5,4]}
+  ]},
+  options:{ responsive:true, animation:false, interaction:{intersect:false,mode:'index'},
+    plugins:{legend:{display:false}},
+    scales:{ y:{suggestedMin:40,suggestedMax:200,grid:{color:'#eef2f6'},ticks:{font:{family:'IBM Plex Mono'}}},
+             x:{grid:{display:false},ticks:{maxTicksLimit:7,font:{family:'IBM Plex Mono',size:10}}} } }
+});
+
+// ---- presets ----
+document.querySelectorAll('.chipbtn').forEach(b=>b.onclick=()=>{
+  if(b.dataset.preset==='public'){
+    $('host').value='broker.hivemq.com'; $('port').value='8000'; $('path').value='/mqtt';
+    $('tls').value='no'; $('user').value=''; $('pass').value='';
+  } else {
+    $('host').value='YOUR-CLUSTER.s1.eu.hivemq.cloud'; $('port').value='8884'; $('path').value='/mqtt';
+    $('tls').value='yes'; $('user').value=''; $('pass').value='';
+  }
+  refreshHint();
+});
+
+function buildUrl(){
+  const scheme = $('tls').value==='yes' ? 'wss' : 'ws';
+  let path = $('path').value.trim(); if(path && !path.startsWith('/')) path='/'+path;
+  return `${scheme}://${$('host').value.trim()}:${$('port').value.trim()}${path}`;
+}
+function refreshHint(){ $('urlHint').textContent = 'Will connect to: '+buildUrl(); }
+['host','port','path','tls'].forEach(id=>$(id).addEventListener('input',refreshHint));
+$('tls').addEventListener('change',refreshHint);
+refreshHint();
+
+$('toggleSettings').onclick=()=>{ const s=$('settings'); s.style.display = s.style.display==='none'?'block':'none'; };
+
+// ---- connect ----
+$('connectBtn').onclick=()=>{
+  if(client){ client.end(true); client=null; }
+  pid = $('pid').value.trim() || 'HTN-1010';
+  $('pidTitle').textContent = '— Patient '+pid;
+  $('cmdTopic').textContent = `tensiovigil/${pid}/command`;
+  const url = buildUrl();
+  const opts = { clean:true, reconnectPeriod:4000, connectTimeout:8000,
+    clientId:'tv-dash-'+Math.random().toString(16).slice(2,8) };
+  if($('user').value) opts.username=$('user').value;
+  if($('pass').value) opts.password=$('pass').value;
+
+  setStatus('connecting');
+  try { client = mqtt.connect(url, opts); } catch(e){ setStatus('err','Bad URL'); return; }
+
+  client.on('connect',()=>{
+    setStatus('on');
+    $('qosPill').style.display='inline-flex';
+    $('tlsPill').style.display = $('tls').value==='yes' ? 'inline-flex' : 'none';
+    client.subscribe(`tensiovigil/${pid}/vitals`,{qos:1});
+    client.subscribe(`tensiovigil/${pid}/alert`,{qos:1});
+    document.querySelectorAll('.cmd-btns .btn').forEach(b=>b.disabled=false);
+  });
+  client.on('reconnect',()=>setStatus('connecting'));
+  client.on('error',e=>{ setStatus('err', e.message||'error'); });
+  client.on('close',()=>{ if($('connText').textContent!=='Connecting…') setStatus('off'); });
+  client.on('message',(topic,buf)=>handleMsg(topic,buf.toString()));
+};
+
+function setStatus(state,msg){
+  const dot=$('dot'), t=$('connText');
+  dot.className='dot';
+  if(state==='on'){ dot.classList.add('on'); t.textContent='Connected'; }
+  else if(state==='connecting'){ t.textContent='Connecting…'; }
+  else if(state==='err'){ dot.classList.add('err'); t.textContent='Error: '+(msg||''); }
+  else { t.textContent='Disconnected';
+    document.querySelectorAll('.cmd-btns .btn').forEach(b=>b.disabled=true);
+    $('qosPill').style.display='none'; $('tlsPill').style.display='none'; }
+}
+
+// ---- message handling ----
+function handleMsg(topic,payload){
+  let m; try{ m=JSON.parse(payload); }catch(e){ return; }
+  if(topic.endsWith('/vitals')) updateVitals(m);
+  else if(topic.endsWith('/alert')) addAlert(m);
+}
+
+function classCat(cat){ return cat<=1?'ok':(cat<=3?'warn':'crit'); }
+
+function updateVitals(m){
+  $('vSbp').textContent=m.sbp; $('vDbp').textContent=m.dbp;
+  $('vHr').textContent=m.hr; $('vTmp').textContent=(m.tempC!=null?Number(m.tempC).toFixed(1):'--');
+  const cls=classCat(m.cat??0);
+  $('tSbp').className='tile '+cls; $('tDbp').className='tile '+cls;
+  $('gSbp').textContent=m.label||''; $('gDbp').textContent=(m.dbp>=120?'Crisis (≥120)':' ');
+  // HR colouring
+  const hrCls = (m.hr<60||m.hr>100)?'warn':'ok';
+  $('tHr').className='tile '+hrCls;
+  $('gHr').textContent = m.hr<60?'Bradycardia':(m.hr>100?'Tachycardia':'Normal');
+  // temp
+  const tCls=(m.tempC>=38||m.tempC<35)?'warn':'ok';
+  $('tTmp').className='tile '+tCls;
+  $('gTmp').textContent=(m.tempC>=38?'Febrile':(m.tempC<35?'Low':'Normal'));
+  // chart
+  const lbl=new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  chart.data.labels.push(lbl);
+  chart.data.datasets[0].data.push(m.sbp);
+  chart.data.datasets[1].data.push(m.dbp);
+  chart.data.datasets[2].data.push(m.hr);
+  if(chart.data.labels.length>MAXPTS){ chart.data.labels.shift(); chart.data.datasets.forEach(d=>d.data.shift()); }
+  chart.update();
+}
+
+function addAlert(m){
+  const log=$('log'); const empty=log.querySelector('.empty'); if(empty) empty.remove();
+  const reason=(m.reason||'ALERT');
+  const lvl = reason.includes('CRISIS')?'crit':(reason.includes('CARDIA')?'warn':'info');
+  const time=new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const li=document.createElement('li'); li.className='lvl-'+lvl;
+  li.innerHTML=`<span class="t">${time} ${reason.replace(/_/g,' ')}</span><br>
+    <span class="r">SBP ${m.sbp}/DBP ${m.dbp} &middot; HR ${m.hr} bpm</span>`;
+  log.prepend(li);
+  while(log.children.length>12) log.removeChild(log.lastChild);
+}
+
+// ---- commands ----
+document.querySelectorAll('.cmd-btns .btn').forEach(b=>b.onclick=()=>{
+  if(!client||!client.connected) return;
+  const cmd=b.dataset.cmd, topic=`tensiovigil/${pid}/command`, msg=JSON.stringify({cmd});
+  client.publish(topic,msg,{qos:1});
+  const time=new Date().toLocaleTimeString();
+  $('lastCmd').innerHTML=`Last command: <code>${msg}</code> published to <code>${topic}</code> at ${time}.`;
+});
+</script>
+</body>
+</html>

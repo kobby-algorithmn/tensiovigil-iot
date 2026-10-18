@@ -1,0 +1,8 @@
+# Wokwi Library List
+# See https://docs.wokwi.com/guides/libraries
+
+LiquidCrystal I2C
+DHT sensor library
+Adafruit Unified Sensor
+PubSubClient
+ArduinoJson
